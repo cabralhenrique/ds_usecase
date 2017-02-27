@@ -26,6 +26,9 @@ red_wine <- fread('red_wine.csv')
 # read data
 white_wine <- fread('white_wine.csv')
 
+# delete files
+file.remove(c('red_wine.csv','white_wine.csv'))
+
 # join two datasets into a single one
 wine <- rbind(
     red_wine[, wine_type := 'red'],
@@ -186,11 +189,31 @@ do.call(grid.arrange, c(g))
 ```
 
 ```{r }
+# library(NbClust)
+# 
+# n_cluster <- NbClust(df_pca[, .(PC1,PC2,PC3,PC4)], min.nc = 2, max.nc = 8, method = 'kmeans')
 
-getSS <- function(x. clu) {
-    clust <- kmeans(x, centers = clu)
-    return(list(totss = clust$totss, betss = clust$betweenss))
+elbow <- data.table()
+for (clu in seq(2,10)) {
+    clust <- kmeans(df_pca[, .(PC1,PC2,PC3)], centers = clu) # wine[, -'quality', with=F]
+    elbow <- rbind(
+        elbow,
+        data.table(
+            clu = clu, 
+            totss = clust$totss, 
+            bss = clust$betweenss, 
+            wss = sum(clust$withinss)
+        )
+    )
 }
+
+ggplot(elbow, aes(x = clu, y = wss)) +
+    geom_line() + 
+    geom_point(size = 2) +
+    theme_minimal() + 
+    theme(legend.key = ggplot2::element_blank()) +
+    xlab('# Clusters') + ylab('Explained Variance')
+    
 
 
 
