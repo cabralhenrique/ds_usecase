@@ -1,0 +1,197 @@
+---
+output: pdf_document
+---
+    
+    
+    
+```{r }
+library(data.table)
+library(reshape2)
+library(ggplot2)
+
+# download red wine file
+download.file(
+    url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/wine-quality/winequality-red.csv',
+    destfile = 'red_wine.csv'
+)
+
+download.file(
+    url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/wine-quality/winequality-white.csv',
+    destfile = 'white_wine.csv'
+)
+
+# read data
+red_wine <- fread('red_wine.csv')
+
+# read data
+white_wine <- fread('white_wine.csv')
+
+# join two datasets into a single one
+wine <- rbind(
+    red_wine[, wine_type := 'red'],
+    white_wine[, wine_type := 'white']
+)
+
+# replace empty spaces with a dash
+setnames(wine, colnames(wine), gsub(' ','_',colnames(wine)))
+
+# visualize table
+head(wine)
+
+# examine table
+str(wine)
+
+# variable details
+summary(wine)
+
+```
+### Now let's start processing the data
+```{r }
+
+# convert wine type and wine_quality to factor
+wine[, c('wine_type','quality') := list(
+    as.factor(wine_type),
+    as.factor(quality)
+)]
+
+# reshape dataset to put all variables in the same column
+wine_m <- melt(wine, id.vars = c('wine_type','quality'))
+
+# label outliers
+labelOutliers <- function(x) {
+    outliers <- quantile(x, probs = c(0.025, 0.975))
+    x < outliers[1] | x > outliers[2]
+}
+wine_m[, outliers := labelOutliers(value), by = .(wine_type, variable)]
+
+# now let's visualize the distributions of each variable
+ggplot(
+    wine_m[outliers == FALSE], 
+    aes(x = wine_type, y = value, fill = wine_type, colour = wine_type)
+) +
+    geom_boxplot(alpha = 0.8, notch = T) +
+    facet_wrap(~ variable, scales = 'free') +
+    scale_fill_brewer(palette = 'Set1', name = 'Wine Type') +
+    scale_colour_brewer(palette = 'Set1', name = 'Wine Type') +
+    xlab('') + ylab('Value') +
+    theme_minimal() + 
+    theme(legend.key = ggplot2::element_blank())
+
+# since the two wine types differ greatly, let's focus in only one of them (white)
+wine_m <- wine_m[wine_type == 'white'][, -'wine_type', with = F]
+wine <- wine[wine_type == 'white'][, -'wine_type', with = F]
+
+# now let's visualize the distributions of each variable
+ggplot(
+    wine_m, 
+    aes(x = value, fill = variable, colour = variable)
+) +
+    geom_density(alpha = 0.8) +
+    facet_wrap(~ variable, scales = 'free') +
+    scale_fill_discrete(guide = F) +
+    scale_colour_discrete(guide = F) +
+    xlab('') + ylab('density') +
+    theme_minimal() + 
+    theme(legend.key = ggplot2::element_blank())
+
+```
+
+### Explore the relationship between datapoints
+```{r }
+library(corrplot)
+library(Hmisc)
+
+# make matrix from dataframe
+mat_df <- as.matrix(wine[, -'quality', with = F])
+
+# make correlation matrix
+cor_mat <- rcorr(mat_df)
+
+corrplot(
+    cor_mat$r, p.mat = cor_mat$P, 
+    insig = 'blank', cl.pos = 'b', tl.pos = 'd', tl.srt = 90, order = 'hclust'
+)
+
+
+```
+
+### Principal component analysis
+```{r }
+
+# calculate PCAs
+pca <- prcomp(wine[, -'quality', with = F], scale = T)
+
+# make biplot
+biplot(pca)
+
+# extract pca into df
+df_pca <- as.data.table(pca$x)
+
+```
+
+### Kmeans
+```{r echo = F}
+library(gridExtra)
+
+
+df_ex <- data.table(x = sample(seq(2), 1000, replace=T))
+df_ex[, y := ifelse(x == 1, sample(c(1,2), .N, replace = T), 2)]
+df_ex[, c('x_jit','y_jit') := list(x + rnorm(.N, sd=0.25),y + rnorm(.N, sd=0.25))]
+
+# plot original dataset
+ggplot(df_ex, aes(x = x_jit, y = y_jit)) + 
+    geom_point(size = 3, alpha = 0.6) +
+    theme_minimal() + 
+    theme(legend.key = ggplot2::element_blank()) +
+    xlab('Var1') + ylab('Var2') + ggtitle('Step 0')
+
+# add random initial clusters
+df_ex[, cluster_id := as.factor(sample(seq(3), .N, replace = T))]
+
+# get nearest clusterID
+getNearestClust <- function(xy) {
+    dist <- sqrt((xy['x_jit'] - clust_center$x) ^ 2 + (xy['y_jit'] - clust_center$y) ^ 2)
+    return(which.min(dist))
+}
+g <- list()
+for (i in seq(9)) {
+    clust_center <- df_ex[, 
+        list(x = mean(x_jit), y = mean(y_jit)),
+        by = cluster_id
+    ]
+    
+    df_plot <- df_ex[, .(x_jit, y_jit, cluster_id)]
+    
+    # plot original dataset
+    g[[i]] <- ggplot(df_plot, aes(x = x_jit, y = y_jit, colour = cluster_id)) + 
+        geom_point(size = 3, alpha = 0.8) +
+        geom_point(
+            data = clust_center,
+            aes(x = x, y = y), size = 20
+        ) +
+        # scale_colour_brewer(palette = 'Dark2', name = 'Cluster ID') +
+        theme_minimal() + 
+        theme(legend.key = ggplot2::element_blank()) +
+        xlab('Var1') + ylab('Var2') + ggtitle(sprintf('Step %d',i))
+    
+    # update cluster IDs
+    df_ex[, cluster_id := as.factor(apply(.SD, 1, getNearestClust)), 
+          .SDcols = c('x_jit','y_jit')
+    ]
+    
+}
+
+do.call(grid.arrange, c(g))
+
+```
+
+```{r }
+
+getSS <- function(x. clu) {
+    clust <- kmeans(x, centers = clu)
+    return(list(totss = clust$totss, betss = clust$betweenss))
+}
+
+
+
+```
